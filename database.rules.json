@@ -1,0 +1,25 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    "users": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "privateChats": {
+      "$chatId": {
+        ".read": "auth != null && $chatId.contains(auth.uid)",
+        ".write": "auth != null && $chatId.contains(auth.uid)",
+        "messages": {
+          ".read": "auth != null && $chatId.contains(auth.uid)",
+          ".write": "auth != null && $chatId.contains(auth.uid)",
+          "$messageId": {
+            ".validate": "newData.hasChildren(['senderId', 'text', 'timestamp'])"
+          }
+        }
+      }
+    }
+  }
+} 
