@@ -1,7 +1,8 @@
+import { Platform } from 'react-native';
 import { initializeApp } from 'firebase/app';
-import { getDatabase } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
-import { ref, set } from 'firebase/database';
+import { getDatabase, ref, set } from 'firebase/database';
+import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCyUfIEyDGmwGZJU-VTbifk8ZhAStYRn24",
@@ -16,11 +17,25 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Get database instance
+// Get Auth instance
+const auth = getAuth(app);
+
+// Get Database instance
 const database = getDatabase(app);
 
-// Get auth instance
-const auth = getAuth(app);
+// Get Storage instance with CORS configuration
+const storage = getStorage(app);
+
+// Configure CORS for web platform
+if (Platform.OS === 'web') {
+  // Import web-specific persistence
+  import('firebase/auth').then(({ setPersistence, browserLocalPersistence }) => {
+    setPersistence(auth, browserLocalPersistence)
+      .catch((error) => {
+        console.error('Error setting auth persistence:', error);
+      });
+  });
+}
 
 // Test database connection
 const testConnection = async () => {
@@ -36,4 +51,4 @@ const testConnection = async () => {
 // Run test on initialization
 testConnection();
 
-export { auth, database }; 
+export { auth, database, storage }; 

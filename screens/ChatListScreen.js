@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -7,56 +7,180 @@ import {
   TouchableOpacity,
   SafeAreaView,
   ActivityIndicator,
-  Alert
+  Image,
+  Platform,
+  Alert,
 } from 'react-native';
-import { ref, get, query, orderByChild, limitToLast, onValue, off, onChildAdded, onChildChanged } from 'firebase/database';
-import { database, auth } from '../config/firebase';
+import { ref, get, query, orderByChild, limitToLast, onValue, off, update } from 'firebase/database';
+import { database, auth } from '../config/firebase-web';
+import { requestNotificationPermission, onMessageListener } from '../config/firebase-web';
 
 const ChatListScreen = ({ navigation }) => {
   const [chats, setChats] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [unsubscribers, setUnsubscribers] = useState({});
+  const [notificationToken, setNotificationToken] = useState(null);
 
   useEffect(() => {
-    let unsubscribeChats = null;
-    let unsubscribeMessages = {};
+    let isMounted = true;
+    let chatUnsubscriber = null;
+    
+    // Kullanıcı FCM token'ını izlemek için
+    let messagingUnsubscriber = null;
+
+    const setupNotifications = async () => {
+      if (Platform.OS === 'web') {
+        try {
+          // Platform bilgisini tespit et
+          const isMobileWeb = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+            typeof navigator !== 'undefined' ? navigator.userAgent : ''
+          );
+          const platformInfo = isMobileWeb ? 'mobile-web' : 'web';
+          console.log(`Bildirim kurulumu başlatılıyor. Platform: ${platformInfo}, UA: ${navigator.userAgent.substring(0, 50)}...`);
+
+          // Bildirim izni iste ve token al
+          const token = await requestNotificationPermission();
+          if (token) {
+            setNotificationToken(token);
+            
+            // Token'ı kullanıcı verilerine kaydet
+            const currentUser = auth.currentUser;
+            if (currentUser) {
+              // Platform bilgisini tespit et
+              const isMobileWeb = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+                typeof navigator !== 'undefined' ? navigator.userAgent : ''
+              );
+              const platformInfo = isMobileWeb ? 'mobile-web' : 'web';
+              
+              const userRef = ref(database, `users/${currentUser.uid}`);
+              await update(userRef, {
+                fcmToken: token,
+                platform: platformInfo,
+                lastTokenUpdate: new Date().toISOString(),
+                lastLoginAt: new Date().toISOString(),
+                userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'
+              });
+              console.log(`Bildirim token kullanıcı profiline kaydedildi. Platform: ${platformInfo}`);
+            }
+          }
+
+          // Mesaj dinleyicisini başlat
+          console.log('Ön plan bildirim dinleyicisi başlatılıyor...');
+          onMessageListener()
+            .then(payload => {
+              // Yeni mesaj geldiğinde işle
+              if (payload) {
+                const { title, body } = payload.notification || {};
+                console.log('Web Push bildirimi alındı:', { title, body });
+                
+                // Mesaj ses efekti oynat
+                try {
+                  // Basit bir bip sesi çal
+                  const beep = () => {
+                    if ('AudioContext' in window || 'webkitAudioContext' in window) {
+                      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                      const oscillator = audioCtx.createOscillator();
+                      const gainNode = audioCtx.createGain();
+                      
+                      oscillator.type = 'sine';
+                      oscillator.frequency.value = 800;
+                      gainNode.gain.value = 0.1;
+                      
+                      oscillator.connect(gainNode);
+                      gainNode.connect(audioCtx.destination);
+                      
+                      oscillator.start();
+                      
+                      setTimeout(() => {
+                        oscillator.stop();
+                      }, 200);
+                    }
+                  };
+                  
+                  beep();
+                  
+                  // Özellikle Chrome Mobile için doğrudan bildirim göster
+                  if (isMobileWeb && 'Notification' in window && Notification.permission === 'granted') {
+                    setTimeout(() => {
+                      new Notification(title || 'Yeni mesaj', {
+                        body: body || 'Yeni bir mesaj aldınız',
+                        icon: '/favicon.ico',
+                        tag: `direct-message-${Date.now()}`,
+                        renotify: true
+                      });
+                    }, 100);
+                  }
+                } catch (soundError) {
+                  console.error('Bildirim sesi çalınamadı:', soundError);
+                }
+                
+                // Sohbetleri yeniden yükle
+                loadChats();
+              }
+            })
+            .catch(err => console.error('Bildirim alınamadı:', err));
+            
+          // Service worker olaylarını dinle
+          if ('serviceWorker' in navigator) {
+            console.log('Service worker olay dinleyicisi ekleniyor');
+            
+            // Önceki dinleyicileri temizle (varsa)
+            navigator.serviceWorker.onmessage = null;
+            
+            // Yeni dinleyici ekle
+            navigator.serviceWorker.onmessage = (event) => {
+              console.log('Service worker mesajı alındı:', event.data);
+              if (event.data && (event.data.type === 'NOTIFICATION_RECEIVED' || event.data.type === 'NOTIFICATION_CLICKED')) {
+                // Sohbetleri yeniden yükle
+                loadChats();
+              }
+            };
+            
+            // Kayıtlı service worker'a ulaşma girişimi
+            navigator.serviceWorker.ready.then(registration => {
+              console.log('Service worker hazır:', registration.scope);
+            }).catch(err => {
+              console.error('Service worker erişim hatası:', err);
+            });
+          }
+        } catch (error) {
+          console.error('Bildirim kurulumu hatası:', error);
+        }
+      } else {
+        // Mobil platformlar için burada FCM yapılandırması ve token kaydı yapılabilir
+        console.log('Mobil platform için bildirim kurulumu yapılacak');
+      }
+    };
 
     const loadChats = async () => {
       try {
         const currentUser = auth.currentUser;
         if (!currentUser) {
-          Alert.alert('Debug', 'No authenticated user found');
+          navigation.replace('Login');
           setLoading(false);
           return;
         }
 
-        Alert.alert('Debug', `Current user: ${currentUser.uid}`);
-
-        // Realtime güncelleme için privateChats'i dinle
         const chatsRef = ref(database, 'privateChats');
         
-        unsubscribeChats = onValue(chatsRef, async (snapshot) => {
+        chatUnsubscriber = onValue(chatsRef, async (snapshot) => {
+          if (!isMounted) return;
+
           try {
             if (!snapshot.exists()) {
-              Alert.alert('Debug', 'No chats found in database');
               setChats([]);
               setLoading(false);
               return;
             }
 
             const chatsData = snapshot.val();
-            Alert.alert('Debug', `Found chats: ${Object.keys(chatsData).join(', ')}`);
+            const newChats = [];
+            const newUnsubscribers = {};
             
-            // Her sohbeti kontrol et
             for (const chatId in chatsData) {
               if (chatId.includes(currentUser.uid)) {
-                Alert.alert('Debug', `Processing chat: ${chatId}`);
-                
                 try {
-                  // Diğer kullanıcının ID'sini bul
                   const otherUserId = chatId.split('_').find(id => id !== currentUser.uid);
-                  Alert.alert('Debug', `Other user ID: ${otherUserId}`);
-                  
-                  // Diğer kullanıcının bilgilerini al
                   const userRef = ref(database, `users/${otherUserId}`);
                   const userSnapshot = await get(userRef);
                   
@@ -65,138 +189,172 @@ const ChatListScreen = ({ navigation }) => {
                       uid: otherUserId,
                       ...userSnapshot.val()
                     };
-                    Alert.alert('Debug', `Found other user: ${otherUser.email}`);
                     
-                    // Mesajları dinle
                     const messagesRef = ref(database, `privateChats/${chatId}/messages`);
-                    
-                    // Eğer bu chat için zaten bir dinleyici varsa, onu kaldır
-                    if (unsubscribeMessages[chatId]) {
-                      Alert.alert('Debug', `Removing old listener for chat: ${chatId}`);
-                      unsubscribeMessages[chatId]();
-                    }
-
-                    // Yeni mesaj geldiğinde
-                    const addedUnsubscribe = onChildAdded(messagesRef, (messageSnapshot) => {
-                      const message = messageSnapshot.val();
-                      Alert.alert('Debug', `New message received: ${JSON.stringify(message)}`);
-                      updateChatList(chatId, otherUser, message);
-                    });
-
-                    // Mesaj değiştiğinde
-                    const changedUnsubscribe = onChildChanged(messagesRef, (messageSnapshot) => {
-                      const message = messageSnapshot.val();
-                      Alert.alert('Debug', `Message changed: ${JSON.stringify(message)}`);
-                      updateChatList(chatId, otherUser, message);
-                    });
-
-                    // Unsubscribe fonksiyonlarını sakla
-                    unsubscribeMessages[chatId] = () => {
-                      addedUnsubscribe();
-                      changedUnsubscribe();
-                    };
-
-                    // Mevcut son mesajı al
                     const messagesSnapshot = await get(query(messagesRef, limitToLast(1)));
+                    
                     if (messagesSnapshot.exists()) {
                       const messages = messagesSnapshot.val();
                       const lastMessage = Object.values(messages)[0];
-                      Alert.alert('Debug', `Last message: ${JSON.stringify(lastMessage)}`);
-                      updateChatList(chatId, otherUser, lastMessage);
-                    } else {
-                      Alert.alert('Debug', `No messages found for chat: ${chatId}`);
+                      
+                      newChats.push({
+                        chatId,
+                        otherUserId: otherUser.uid,
+                        otherUserEmail: otherUser.email,
+                        otherUserProfileImage: otherUser.profileImage,
+                        lastMessage: lastMessage.text,
+                        timestamp: lastMessage.timestamp,
+                        isCurrentUser: lastMessage.senderId === currentUser.uid
+                      });
                     }
-                  } else {
-                    Alert.alert('Debug', `User not found: ${otherUserId}`);
                   }
                 } catch (error) {
-                  Alert.alert('Error', `Error processing chat: ${error.message}`);
+                  console.error('Sohbet işleme hatası:', error);
                 }
               }
             }
+
+            if (isMounted) {
+              setChats(newChats.sort((a, b) => b.timestamp - a.timestamp));
+              setUnsubscribers(newUnsubscribers);
+            }
           } catch (error) {
-            Alert.alert('Error', `Error in chat listener: ${error.message}`);
+            console.error('Sohbet listener hatası:', error);
           } finally {
-            setLoading(false);
+            if (isMounted) {
+              setLoading(false);
+            }
           }
         });
-
       } catch (error) {
-        Alert.alert('Error', `Initial setup error: ${error.message}`);
-        setLoading(false);
+        console.error('Başlangıç kurulum hatası:', error);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
 
-    const updateChatList = (chatId, otherUser, message) => {
-      Alert.alert('Debug', `Updating chat list with: ${JSON.stringify({ chatId, otherUser, message })}`);
-      setChats(prevChats => {
-        const newChats = prevChats.filter(chat => chat.chatId !== chatId);
-        const updatedChat = {
-          chatId,
-          otherUserId: otherUser.uid,
-          otherUserEmail: otherUser.email,
-          lastMessage: message.text,
-          timestamp: message.timestamp,
-          isCurrentUser: message.senderId === auth.currentUser.uid
-        };
-        Alert.alert('Debug', `Adding chat: ${JSON.stringify(updatedChat)}`);
-        newChats.push(updatedChat);
-        
-        // Sohbetleri son mesaj zamanına göre sırala
-        const sortedChats = newChats.sort((a, b) => b.timestamp - a.timestamp);
-        Alert.alert('Debug', `Sorted chats: ${JSON.stringify(sortedChats)}`);
-        return sortedChats;
-      });
-    };
-
-    loadChats();
+    // Önce loadChats çağrılsın, sonra setupNotifications
+    loadChats().then(() => {
+      if (Platform.OS === 'web') {
+        setupNotifications();
+      }
+    });
 
     return () => {
-      if (unsubscribeChats) {
-        unsubscribeChats();
+      isMounted = false;
+      if (chatUnsubscriber) {
+        chatUnsubscriber();
       }
-      // Tüm mesaj dinleyicilerini temizle
-      Object.values(unsubscribeMessages).forEach(unsubscribe => unsubscribe());
+      if (messagingUnsubscriber) {
+        messagingUnsubscriber();
+      }
+      Object.values(unsubscribers).forEach(unsubscribe => unsubscribe());
     };
-  }, []);
+  }, [navigation]);
 
-  const handleChatPress = (chat) => {
-    console.warn('Navigating to chat:', JSON.stringify(chat, null, 2));
+  const handleChatPress = useCallback((chat) => {
     navigation.navigate('Chat', {
       currentUserId: auth.currentUser.uid,
       otherUserId: chat.otherUserId,
       chatId: chat.chatId,
       otherUserEmail: chat.otherUserEmail
     });
-  };
+  }, [navigation]);
 
-  const handleNewChat = () => {
-    console.warn('Navigating to New Chat screen');
-    navigation.navigate('New Chat');
-  };
+  const handleNewChat = useCallback(() => {
+    navigation.navigate('Users');
+  }, [navigation]);
+  
+  // Bildirim izni istemek için ayrı bir işlev
+  const handleRequestNotification = useCallback(async () => {
+    if (Platform.OS !== 'web') {
+      Alert.alert('Bilgi', 'Bildirim izni istemek sadece web platformunda gereklidir');
+      return;
+    }
+    
+    try {
+      console.log('Bildirim izni isteniyor...');
+      const token = await requestNotificationPermission();
+      if (token) {
+        setNotificationToken(token);
+        
+        // Test bildirimi göster
+        try {
+          new Notification('Bildirimler Etkin', {
+            body: 'Artık Catty Message bildirimleri alacaksınız',
+            icon: '/favicon.ico'
+          });
+        } catch (notifError) {
+          console.error('Test bildirimi gösterme hatası:', notifError);
+        }
+        
+        Alert.alert('Başarılı', 'Bildirim izni verildi. Artık mesaj bildirimleri alacaksınız.');
+        
+        // Token'ı kullanıcı verilerine kaydet
+        const currentUser = auth.currentUser;
+        if (currentUser) {
+          // Platform bilgisini tespit et
+          const isMobileWeb = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+            typeof navigator !== 'undefined' ? navigator.userAgent : ''
+          );
+          const platformInfo = isMobileWeb ? 'mobile-web' : 'web';
+          
+          const userRef = ref(database, `users/${currentUser.uid}`);
+          await update(userRef, {
+            fcmToken: token,
+            platform: platformInfo,
+            lastTokenUpdate: new Date().toISOString(),
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'
+          });
+          console.log(`Bildirim token kullanıcı profiline kaydedildi. Platform: ${platformInfo}`);
+        }
+      } else {
+        Alert.alert('Bildirim İzni', 'Bildirim izni verilmedi. Mesaj bildirimleri almak için izin vermeniz gerekiyor.');
+      }
+    } catch (error) {
+      console.error('Bildirim izni hatası:', error);
+      Alert.alert('Hata', 'Bildirim izni istenirken bir hata oluştu.');
+    }
+  }, []);
 
-  const renderChatItem = ({ item }) => (
+  const renderChatItem = useCallback(({ item }) => (
     <TouchableOpacity
       style={styles.chatItem}
       onPress={() => handleChatPress(item)}
     >
+      <View style={styles.avatarContainer}>
+        {item.otherUserProfileImage ? (
+          <Image
+            source={{ uri: item.otherUserProfileImage }}
+            style={styles.avatar}
+            onError={(e) => console.log('Resim yükleme hatası:', e.nativeEvent.error)}
+          />
+        ) : (
+          <View style={[styles.avatar, styles.placeholderAvatar]}>
+            <Text style={styles.placeholderText}>
+              {item.otherUserEmail?.charAt(0)?.toUpperCase() || '?'}
+            </Text>
+          </View>
+        )}
+      </View>
       <View style={styles.chatInfo}>
         <Text style={styles.userEmail}>{item.otherUserEmail}</Text>
         <Text style={styles.lastMessage} numberOfLines={1}>
-          {item.isCurrentUser ? 'You: ' : ''}{item.lastMessage}
+          {item.isCurrentUser ? 'Siz: ' : ''}{item.lastMessage}
         </Text>
       </View>
       <Text style={styles.timestamp}>
-        {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        {new Date(item.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
       </Text>
     </TouchableOpacity>
-  );
+  ), [handleChatPress]);
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading chats...</Text>
+        <Text style={styles.loadingText}>Sohbetler yükleniyor...</Text>
       </View>
     );
   }
@@ -204,19 +362,32 @@ const ChatListScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Messages</Text>
-        <TouchableOpacity style={styles.newChatButton} onPress={handleNewChat}>
-          <Text style={styles.newChatButtonText}>New Chat</Text>
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Sohbetler</Text>
+        <View style={styles.headerButtons}>
+          {Platform.OS === 'web' && !notificationToken && (
+            <TouchableOpacity 
+              style={styles.notificationButton} 
+              onPress={handleRequestNotification}
+            >
+              <Text style={styles.notificationButtonText}>Bildirimleri Aç</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity 
+            style={styles.newChatButton} 
+            onPress={handleNewChat}
+          >
+            <Text style={styles.newChatButtonText}>Yeni Sohbet</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       {chats.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>No messages yet</Text>
+          <Text style={styles.emptyText}>Henüz mesajınız yok</Text>
           <TouchableOpacity 
             style={styles.startChatButton}
             onPress={handleNewChat}
           >
-            <Text style={styles.startChatButtonText}>Start a New Chat</Text>
+            <Text style={styles.startChatButtonText}>Yeni Sohbet Başlat</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -250,79 +421,112 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 15,
+    padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
-    backgroundColor: '#f8f8f8',
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#fff',
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
+    color: '#1f2937',
+  },
+  headerButtons: {
+    flexDirection: 'row',
   },
   newChatButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
   },
   newChatButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontWeight: '600',
+  },
+  notificationButton: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 8,
+  },
+  notificationButtonText: {
+    color: '#fff',
     fontWeight: '600',
   },
   listContainer: {
-    padding: 10,
+    padding: 16,
   },
   chatItem: {
     flexDirection: 'row',
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    backgroundColor: '#fff',
     justifyContent: 'space-between',
     alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    marginBottom: 8,
+  },
+  avatarContainer: {
+    marginRight: 12,
+  },
+  avatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+  },
+  placeholderAvatar: {
+    backgroundColor: '#e5e7eb',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placeholderText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#9ca3af',
   },
   chatInfo: {
     flex: 1,
-    marginRight: 10,
+    marginRight: 12,
   },
   userEmail: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
+    fontWeight: '600',
+    color: '#1f2937',
     marginBottom: 4,
   },
   lastMessage: {
     fontSize: 14,
-    color: '#666',
+    color: '#6b7280',
   },
   timestamp: {
     fontSize: 12,
-    color: '#999',
+    color: '#9ca3af',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: 16,
   },
   emptyText: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 20,
+    fontSize: 18,
+    color: '#6b7280',
+    marginBottom: 16,
   },
   startChatButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
   },
   startChatButtonText: {
     color: '#fff',
-    fontSize: 16,
     fontWeight: '600',
-  },
+    fontSize: 16,
+  }
 });
 
 export default ChatListScreen; 

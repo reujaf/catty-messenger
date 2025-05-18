@@ -1,103 +1,126 @@
 import React, { useState, useEffect } from 'react';
 import {
-  StyleSheet,
   View,
   Text,
   TextInput,
   TouchableOpacity,
   Alert,
-  SafeAreaView,
   ActivityIndicator,
+  StyleSheet,
+  SafeAreaView,
+  Image,
+  Modal,
 } from 'react-native';
-import { auth, database } from '../config/firebase';
-import { ref, get, update } from 'firebase/database';
-import { signOut, updatePassword } from 'firebase/auth';
+import { getAuth, updatePassword, signOut } from 'firebase/auth';
+import { getDatabase, ref, get, set } from 'firebase/database';
+import { database } from '../config/firebase-web';
 
 const AccountScreen = ({ navigation }) => {
-  const [loading, setLoading] = useState(true);
-  const [userData, setUserData] = useState(null);
   const [username, setUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [isEditing, setIsEditing] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [updating, setUpdating] = useState(false);
+  const [profileImage, setProfileImage] = useState(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [imageUrl, setImageUrl] = useState('');
 
   useEffect(() => {
-    loadUserData();
-  }, []);
-
-  const loadUserData = async () => {
-    try {
-      const currentUser = auth.currentUser;
-      if (!currentUser) {
-        navigation.navigate('Login');
-        return;
-      }
-
-      const userRef = ref(database, `users/${currentUser.uid}`);
-      const snapshot = await get(userRef);
-      
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        setUserData(data);
-        setUsername(data.username);
-      }
-      
-      setLoading(false);
-    } catch (error) {
-      Alert.alert('Hata', 'Kullanıcı bilgileri yüklenirken bir hata oluştu.');
-      setLoading(false);
+    const auth = getAuth();
+    const currentUser = auth.currentUser;
+    
+    if (!currentUser) {
+      navigation.navigate('Login');
+      return;
     }
-  };
 
-  const handleSave = async () => {
+    const userRef = ref(database, `users/${currentUser.uid}`);
+    get(userRef).then((snapshot) => {
+      if (snapshot.exists()) {
+        setUsername(snapshot.val().username || '');
+        setProfileImage(snapshot.val().profileImage);
+      }
+      setLoading(false);
+    });
+  }, [navigation]);
+
+  const handleUpdateProfile = async () => {
     try {
+      setUpdating(true);
+      const auth = getAuth();
       const currentUser = auth.currentUser;
-      if (!currentUser) return;
-
-      // Kullanıcı adının benzersiz olduğunu kontrol et
-      if (username !== userData.username) {
-        const usersRef = ref(database, 'users');
-        const usersSnapshot = await get(usersRef);
-        const users = usersSnapshot.val() || {};
-        
-        const isUsernameTaken = Object.values(users).some(
-          user => user.username === username && user.email !== userData.email
-        );
-        
-        if (isUsernameTaken) {
-          Alert.alert('Hata', 'Bu kullanıcı adı zaten kullanılıyor.');
+      
+      if (newPassword && confirmPassword) {
+        if (newPassword !== confirmPassword) {
+          Alert.alert('Hata', 'Şifreler eşleşmiyor');
           return;
         }
-      }
-
-      const updates = {
-        username: username,
-      };
-
-      await update(ref(database, `users/${currentUser.uid}`), updates);
-
-      if (newPassword) {
+        if (newPassword.length < 6) {
+          Alert.alert('Hata', 'Şifre en az 6 karakter olmalıdır');
+          return;
+        }
         await updatePassword(currentUser, newPassword);
       }
 
-      Alert.alert('Başarılı', 'Hesap bilgileriniz güncellendi.');
-      setIsEditing(false);
+      const userRef = ref(database, `users/${currentUser.uid}`);
+      await set(userRef, {
+        email: currentUser.email,
+        username: username,
+        profileImage: profileImage,
+      });
+
+      Alert.alert('Başarılı', 'Profil güncellendi');
       setNewPassword('');
-      loadUserData();
+      setConfirmPassword('');
     } catch (error) {
-      let errorMessage = 'Bilgiler güncellenirken bir hata oluştu.';
-      if (error.code === 'auth/weak-password') {
-        errorMessage = 'Şifre en az 6 karakter olmalıdır.';
-      }
-      Alert.alert('Hata', errorMessage);
+      Alert.alert('Hata', error.message);
+    } finally {
+      setUpdating(false);
     }
   };
 
   const handleLogout = async () => {
     try {
+      const auth = getAuth();
       await signOut(auth);
       navigation.navigate('Login');
     } catch (error) {
-      Alert.alert('Hata', 'Çıkış yapılırken bir hata oluştu.');
+      Alert.alert('Hata', error.message);
+    }
+  };
+
+  const handleProfileImageUpdate = () => {
+    setModalVisible(true);
+  };
+
+  const handleSaveImageUrl = async () => {
+    if (!imageUrl) {
+      Alert.alert('Hata', 'Geçerli bir URL girmelisiniz');
+      return;
+    }
+
+    try {
+      // URL'in geçerli olup olmadığını kontrol et
+      const response = await fetch(imageUrl);
+      if (!response.ok || !response.headers.get('content-type')?.includes('image')) {
+        throw new Error('Geçersiz resim URL\'i');
+      }
+
+      const auth = getAuth();
+      const currentUser = auth.currentUser;
+      const userRef = ref(database, `users/${currentUser.uid}`);
+      await set(userRef, {
+        email: currentUser.email,
+        username: username,
+        profileImage: imageUrl,
+      });
+
+      setProfileImage(imageUrl);
+      setModalVisible(false);
+      setImageUrl('');
+      Alert.alert('Başarılı', 'Profil fotoğrafı güncellendi');
+    } catch (error) {
+      Alert.alert('Hata', 'Geçersiz resim URL\'i. Lütfen başka bir URL deneyin.');
     }
   };
 
@@ -111,59 +134,127 @@ const AccountScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Hesap Ayarları</Text>
-      </View>
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Profil Fotoğrafı URL</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={imageUrl}
+              onChangeText={setImageUrl}
+              placeholder="Resim URL'ini girin"
+              placeholderTextColor="#9ca3af"
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => {
+                  setModalVisible(false);
+                  setImageUrl('');
+                }}
+              >
+                <Text style={styles.modalButtonText}>İptal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={handleSaveImageUrl}
+              >
+                <Text style={styles.modalButtonText}>Kaydet</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <View style={styles.content}>
-        <View style={styles.infoContainer}>
-          <Text style={styles.label}>E-posta</Text>
-          <Text style={styles.value}>{userData?.email}</Text>
+        <Text style={styles.title}>Hesap Ayarları</Text>
+        
+        <View style={styles.profileSection}>
+          <TouchableOpacity 
+            style={styles.imageContainer} 
+            onPress={handleProfileImageUpdate}
+          >
+            {profileImage ? (
+              <Image
+                source={{ uri: profileImage }}
+                style={styles.profileImage}
+                onError={() => {
+                  Alert.alert('Hata', 'Fotoğraf yüklenirken bir hata oluştu.');
+                  setProfileImage(null);
+                }}
+              />
+            ) : (
+              <View style={styles.placeholderImage}>
+                <Text style={styles.placeholderText}>
+                  {username?.charAt(0)?.toUpperCase() || '?'}
+                </Text>
+              </View>
+            )}
+            <View style={styles.editBadge}>
+              <Text style={styles.editBadgeText}>Düzenle</Text>
+            </View>
+          </TouchableOpacity>
+
+          <Text style={styles.email}>{username}</Text>
         </View>
 
-        <View style={styles.infoContainer}>
+        <View style={styles.inputContainer}>
           <Text style={styles.label}>Kullanıcı Adı</Text>
-          {isEditing ? (
-            <TextInput
-              style={styles.input}
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-            />
-          ) : (
-            <Text style={styles.value}>{userData?.username}</Text>
-          )}
+          <TextInput
+            style={styles.input}
+            value={username}
+            onChangeText={setUsername}
+            placeholder="Kullanıcı adınızı girin"
+            placeholderTextColor="#9ca3af"
+          />
         </View>
 
-        {isEditing && (
-          <View style={styles.infoContainer}>
-            <Text style={styles.label}>Yeni Şifre (İsteğe bağlı)</Text>
-            <TextInput
-              style={styles.input}
-              value={newPassword}
-              onChangeText={setNewPassword}
-              secureTextEntry
-              placeholder="Yeni şifre girin"
-            />
-          </View>
-        )}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Yeni Şifre</Text>
+          <TextInput
+            style={styles.input}
+            value={newPassword}
+            onChangeText={setNewPassword}
+            placeholder="Yeni şifrenizi girin"
+            placeholderTextColor="#9ca3af"
+            secureTextEntry
+          />
+        </View>
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Şifre Tekrar</Text>
+          <TextInput
+            style={styles.input}
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            placeholder="Şifrenizi tekrar girin"
+            placeholderTextColor="#9ca3af"
+            secureTextEntry
+          />
+        </View>
 
         <TouchableOpacity
-          style={[styles.button, isEditing ? styles.saveButton : styles.editButton]}
-          onPress={isEditing ? handleSave : () => setIsEditing(true)}
+          style={[styles.button, styles.updateButton]}
+          onPress={handleUpdateProfile}
+          disabled={updating}
         >
-          <Text style={styles.buttonText}>
-            {isEditing ? 'Kaydet' : 'Düzenle'}
-          </Text>
+          {updating ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text style={styles.buttonText}>Profili Güncelle</Text>
+          )}
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.button, styles.logoutButton]}
           onPress={handleLogout}
         >
-          <Text style={[styles.buttonText, styles.logoutButtonText]}>
-            Çıkış Yap
-          </Text>
+          <Text style={styles.buttonText}>Çıkış Yap</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -179,65 +270,154 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  header: {
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
-    backgroundColor: '#f8f8f8',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
+    backgroundColor: '#fff',
   },
   content: {
-    padding: 20,
+    flex: 1,
+    padding: 16,
   },
-  infoContainer: {
-    marginBottom: 20,
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    marginBottom: 24,
+  },
+  inputContainer: {
+    marginBottom: 16,
   },
   label: {
     fontSize: 14,
-    color: '#666',
-    marginBottom: 5,
-  },
-  value: {
-    fontSize: 16,
-    color: '#333',
+    color: '#4b5563',
+    marginBottom: 8,
   },
   input: {
-    backgroundColor: '#f8f8f8',
+    backgroundColor: '#f9fafb',
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
     padding: 12,
     fontSize: 16,
+    color: '#1f2937',
   },
   button: {
-    borderRadius: 8,
-    padding: 15,
+    borderRadius: 12,
+    padding: 16,
     alignItems: 'center',
-    marginBottom: 15,
+    justifyContent: 'center',
+    marginBottom: 12,
   },
-  editButton: {
+  updateButton: {
     backgroundColor: '#007AFF',
   },
-  saveButton: {
-    backgroundColor: '#34C759',
-  },
   logoutButton: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#FF3B30',
+    backgroundColor: '#ef4444',
   },
   buttonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },
-  logoutButtonText: {
-    color: '#FF3B30',
+  profileSection: {
+    alignItems: 'center',
+    marginVertical: 32,
+  },
+  imageContainer: {
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    marginBottom: 16,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+  },
+  profileImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 75,
+  },
+  placeholderImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 75,
+    backgroundColor: '#e5e7eb',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placeholderText: {
+    fontSize: 48,
+    fontWeight: 'bold',
+    color: '#9ca3af',
+  },
+  editBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  editBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  email: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 20,
+    width: '90%',
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    color: '#1f2937',
+  },
+  modalInput: {
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    color: '#1f2937',
+    marginBottom: 15,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  modalButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginLeft: 10,
+  },
+  cancelButton: {
+    backgroundColor: '#ef4444',
+  },
+  saveButton: {
+    backgroundColor: '#007AFF',
+  },
+  modalButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
 

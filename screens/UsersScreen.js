@@ -10,7 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { ref, get } from 'firebase/database';
-import { database, auth } from '../config/firebase';
+import { database, auth } from '../config/firebase-web';
 
 const UsersScreen = ({ navigation, route }) => {
   const [users, setUsers] = useState([]);
@@ -25,22 +25,18 @@ const UsersScreen = ({ navigation, route }) => {
         
         const currentUser = auth.currentUser;
         if (!currentUser) {
-          throw new Error('No authenticated user found');
+          throw new Error('Kullanıcı girişi bulunamadı');
         }
 
-        console.log('Fetching users from database...');
         const usersRef = ref(database, 'users');
         const snapshot = await get(usersRef);
         
         if (!snapshot.exists()) {
-          console.log('No users found in database');
           setUsers([]);
           return;
         }
 
         const usersData = snapshot.val();
-        console.log('Users data from database:', usersData);
-        
         const usersArray = Object.entries(usersData)
           .map(([uid, userData]) => ({
             uid,
@@ -48,12 +44,11 @@ const UsersScreen = ({ navigation, route }) => {
           }))
           .filter(user => user.uid !== currentUser.uid);
 
-        console.log('Filtered users:', usersArray);
         setUsers(usersArray);
       } catch (error) {
-        console.error('Error fetching users:', error);
+        console.error('Kullanıcılar yüklenirken hata:', error);
         setError(error.message);
-        Alert.alert('Error', 'Failed to fetch users. Please try again.');
+        Alert.alert('Hata', 'Kullanıcılar yüklenemedi. Lütfen tekrar deneyin.');
       } finally {
         setLoading(false);
       }
@@ -65,25 +60,14 @@ const UsersScreen = ({ navigation, route }) => {
   const handleUserPress = (user) => {
     const currentUser = auth.currentUser;
     if (!currentUser) {
-      console.log('No authenticated user found');
+      Alert.alert('Hata', 'Kullanıcı girişi bulunamadı');
       return;
     }
 
-    console.log('Selected user:', user);
-    console.log('Current user:', currentUser);
-
     // Chat ID'yi UID'leri kullanarak oluştur
     const chatId = [currentUser.uid, user.uid].sort().join('_');
-    console.log('Created chatId:', chatId);
 
     // Chat ekranına yönlendir
-    console.log('Navigating to Chat screen with:', {
-      currentUserId: currentUser.uid,
-      otherUserId: user.uid,
-      chatId: chatId,
-      otherUserEmail: user.email
-    });
-
     navigation.navigate('Chat', { 
       currentUserId: currentUser.uid,
       otherUserId: user.uid,
@@ -99,6 +83,9 @@ const UsersScreen = ({ navigation, route }) => {
     >
       <View style={styles.userInfo}>
         <Text style={styles.userEmail}>{item.email}</Text>
+        {item.username && (
+          <Text style={styles.username}>{item.username}</Text>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -107,7 +94,7 @@ const UsersScreen = ({ navigation, route }) => {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading users...</Text>
+        <Text style={styles.loadingText}>Kullanıcılar yükleniyor...</Text>
       </View>
     );
   }
@@ -120,7 +107,7 @@ const UsersScreen = ({ navigation, route }) => {
           style={styles.retryButton}
           onPress={() => setLoading(true)}
         >
-          <Text style={styles.retryButtonText}>Retry</Text>
+          <Text style={styles.retryButtonText}>Tekrar Dene</Text>
         </TouchableOpacity>
       </View>
     );
@@ -129,11 +116,11 @@ const UsersScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Select a User to Chat</Text>
+        <Text style={styles.headerTitle}>Sohbet Etmek İstediğiniz Kişiyi Seçin</Text>
       </View>
       {users.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>No users available</Text>
+          <Text style={styles.emptyText}>Kullanılabilir kullanıcı yok</Text>
         </View>
       ) : (
         <FlatList
@@ -170,7 +157,7 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: 16,
-    color: '#ff3b30',
+    color: '#ef4444',
     textAlign: 'center',
     marginBottom: 20,
   },
@@ -178,49 +165,57 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     paddingHorizontal: 20,
     paddingVertical: 10,
-    borderRadius: 8,
+    borderRadius: 12,
   },
   retryButtonText: {
     color: '#fff',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
   header: {
-    padding: 15,
+    padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
-    backgroundColor: '#f8f8f8',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  listContainer: {
-    padding: 10,
-  },
-  userItem: {
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderBottomColor: '#e5e7eb',
     backgroundColor: '#fff',
   },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1f2937',
+  },
+  listContainer: {
+    padding: 16,
+  },
+  userItem: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
   userInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flex: 1,
   },
   userEmail: {
     fontSize: 16,
-    color: '#333',
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  username: {
+    fontSize: 14,
+    color: '#6b7280',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
   },
   emptyText: {
     fontSize: 16,
-    color: '#666',
+    color: '#6b7280',
   },
 });
 

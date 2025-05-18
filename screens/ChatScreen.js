@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  StyleSheet,
   View,
   Text,
   TextInput,
@@ -9,34 +8,36 @@ import {
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
+  StyleSheet,
+  Animated,
+  Alert,
 } from 'react-native';
-import { ref, push, onValue, off, set } from 'firebase/database';
-import { database, auth } from '../config/firebase';
+import { ref, push, onValue, off, set, get } from 'firebase/database';
+import { database, auth } from '../config/firebase-web';
 
 const ChatScreen = ({ route }) => {
   const { currentUserId, otherUserId, chatId, otherUserEmail } = route.params;
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
+  const flatListRef = useRef(null);
+  const inputHeight = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    console.log('Chat screen mounted with params:', { currentUserId, otherUserId, chatId, otherUserEmail });
-    
     const messagesRef = ref(database, `privateChats/${chatId}/messages`);
-    console.log('Messages reference path:', messagesRef.toString());
     
     const handleData = (snapshot) => {
       const data = snapshot.val();
-      console.log('Received messages data:', data);
       
       if (data) {
         const messagesArray = Object.entries(data).map(([id, message]) => ({
           id,
           ...message,
         }));
-        console.log('Processed messages array:', messagesArray);
         setMessages(messagesArray);
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 100);
       } else {
-        console.log('No messages found for this chat');
         setMessages([]);
       }
     };
@@ -50,10 +51,6 @@ const ChatScreen = ({ route }) => {
 
   const sendMessage = () => {
     if (newMessage.trim()) {
-      console.log('Sending message:', newMessage);
-      console.log('Chat ID:', chatId);
-      console.log('Current user ID:', currentUserId);
-      
       const messagesRef = ref(database, `privateChats/${chatId}/messages`);
       const newMessageRef = push(messagesRef);
       
@@ -63,48 +60,239 @@ const ChatScreen = ({ route }) => {
         timestamp: Date.now()
       };
       
-      console.log('Message data:', messageData);
+      // Animasyonu başlat
+      Animated.sequence([
+        Animated.timing(inputHeight, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: false,
+        }),
+        Animated.timing(inputHeight, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: false,
+        })
+      ]).start();
       
       set(newMessageRef, messageData)
         .then(() => {
-          console.log('Message sent successfully');
           setNewMessage('');
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+          
+          // Bildirim gönder
+          sendNotificationToReceiver(otherUserId, messageData);
         })
         .catch((error) => {
-          console.error('Error sending message:', error);
+          Alert.alert('Hata', 'Mesaj gönderilirken bir hata oluştu.');
         });
+    }
+  };
+
+  // Alıcıya bildirim gönder
+  const sendNotificationToReceiver = async (receiverId, messageData) => {
+    try {
+      // Alıcının FCM token'ını al
+      const userRef = ref(database, `users/${receiverId}`);
+      const userSnapshot = await get(userRef);
+      
+      if (userSnapshot.exists()) {
+        const userData = userSnapshot.val();
+        const fcmToken = userData.fcmToken;
+
+        // Gönderen kullanıcı bilgilerini al
+        const currentUser = auth.currentUser;
+        const senderEmail = currentUser.email;
+        
+        // ÖNEMLİ: Eğer alıcı ID'si gönderen ID ile aynıysa bildirim gönderme
+        // Bu, kullanıcının kendi mesajı için bildirim almasını engeller
+        if (receiverId === currentUserId) {
+          console.log('Kendi mesajını gönderen kullanıcıya bildirim gönderilmiyor');
+          return;
+        }
+        
+        console.log(`Alıcı bilgileri: ${receiverId}, FCM Token: ${fcmToken?.substring(0, 15)}... Platform: ${userData.platform || 'bilinmiyor'}`);
+        
+        // Kullanıcının FCM token'ı varsa
+        if (fcmToken) {
+          // FCM bildirimini hazırla
+          console.log(`${Platform.OS} platformundan bildirim gönderiliyor`);
+          
+          // FCM'ye gönderilecek veri - Mobil için de çalışacak şekilde ayarla
+          const notificationData = {
+            to: fcmToken,
+            notification: {
+              title: `Yeni mesaj: ${senderEmail}`,
+              body: messageData.text,
+              icon: '/favicon.ico',
+              badge: '/badge.png',
+              tag: `message-${Date.now()}`,
+              sound: 'default'
+            },
+            data: {
+              type: 'NEW_MESSAGE',
+              chatId: chatId,
+              senderId: currentUserId,
+              senderEmail: senderEmail,
+              otherUserId: otherUserId,
+              otherUserEmail: otherUserEmail,
+              messageText: messageData.text,
+              timestamp: messageData.timestamp,
+              url: typeof window !== 'undefined' ? window.location.origin : ''
+            },
+            priority: 'high',
+            content_available: true
+          };
+          
+          // Mobile Chrome için FCM bildirimlerini iyileştiren ayarlar
+          if (userData.platform === 'mobile-web' || userData.userAgent?.includes('Mobile')) {
+            // Mobile tarayıcılara özel ek ayarlar
+            notificationData.webpush = {
+              headers: {
+                TTL: '86400',
+                Urgency: 'high'
+              },
+              notification: {
+                requireInteraction: true,
+                vibrate: [200, 100, 200]
+              },
+              fcm_options: {
+                link: typeof window !== 'undefined' ? window.location.origin : ''
+              }
+            };
+          }
+          
+          // FCM API'sine doğrudan istek gönder (hangi platformdan olursa olsun)
+          const serverKey = 'AAAAsZ-Vz2w:APA91bG_zBWyqJZMbpZqZ8O00Tk8RR3-5CxjFEWQNZAKpQ6KcBnVVKhvxUMmrNtFLQzdpfXHTLbCnx4eHbHn5P2qpujmuxJUzf54ByQ-vQrDcTxhHJAHZFqVMH47fFxIvS0fzUoDPFGo';
+          
+          // FCM API'sine POST isteği gönder - Tüm platformlarda çalışacak
+          // Global fetch kullan, her platform için aynı şekilde çalışacak
+          global.fetch('https://fcm.googleapis.com/fcm/send', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `key=${serverKey}`
+            },
+            body: JSON.stringify(notificationData)
+          })
+          .then(response => {
+            console.log(`FCM API yanıtı status: ${response.status}`);
+            if (!response.ok) {
+              throw new Error(`HTTP hata, durum: ${response.status}`);
+            }
+            return response.json();
+          })
+          .then(data => {
+            console.log('Bildirim başarıyla gönderildi:', data);
+            
+            // Web platformu için ek kontrol - özellikle Chrome Mobile için fallback çözüm
+            if (Platform.OS === 'web' && typeof window !== 'undefined' && 
+                'Notification' in window && Notification.permission === 'granted' &&
+                (userData.platform === 'mobile-web' || userData.userAgent?.includes('Mobile'))) {
+              
+              setTimeout(() => {
+                try {
+                  // Bildirim göstermeden önce bir süre bekle - mobil chrome için daha güvenilir
+                  new Notification(`Yeni mesaj: ${senderEmail}`, {
+                    body: messageData.text,
+                    icon: '/favicon.ico',
+                    tag: `direct-message-${Date.now()}`,
+                    renotify: true,
+                    vibrate: [200, 100, 200],
+                    requireInteraction: true
+                  });
+                  console.log('Mobil web için ek bildirim gösterildi');
+                } catch (notifError) {
+                  console.error('Browser bildirimi gösterme hatası:', notifError);
+                }
+              }, 300);
+            }
+          })
+          .catch(error => {
+            console.error('FCM bildirim hatası:', error);
+            
+            // Sadece Web platformu için yedek bildirim
+            if (Platform.OS === 'web' && typeof window !== 'undefined' && 
+                'Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification(`Yeni mesaj: ${senderEmail}`, {
+                  body: messageData.text,
+                  icon: '/favicon.ico',
+                  tag: `direct-message-fallback-${Date.now()}`,
+                  renotify: true,
+                  vibrate: [200, 100, 200]
+                });
+                console.log('FCM hatası - Doğrudan tarayıcı bildirimi gönderildi');
+              } catch (notifError) {
+                console.error('Yedek bildirim hatası:', notifError);
+              }
+            }
+          });
+        } else {
+          console.log(`Alıcının (${receiverId}) FCM token'ı bulunmuyor`);
+        }
+      } else {
+        console.log(`Alıcı kullanıcı bulunamadı: ${receiverId}`);
+      }
+    } catch (error) {
+      console.error('Bildirim gönderme hatası:', error);
     }
   };
 
   const renderMessage = ({ item }) => {
     const isCurrentUser = item.senderId === currentUserId;
     return (
-      <View
+      <Animated.View
         style={[
           styles.messageContainer,
-          isCurrentUser ? styles.myMessage : styles.otherMessage,
+          isCurrentUser ? styles.currentUserMessage : styles.otherUserMessage,
+          {
+            transform: [{
+              translateY: inputHeight.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, -10]
+              })
+            }]
+          }
         ]}
       >
-        <Text style={styles.senderText}>{isCurrentUser ? 'You' : otherUserEmail}</Text>
-        <Text style={styles.messageText}>{item.text}</Text>
-        <Text style={styles.messageTime}>
-          {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        <Text style={styles.senderName}>
+          {isCurrentUser ? 'Siz' : otherUserEmail}
         </Text>
-      </View>
+        <Text style={[
+          styles.messageText,
+          isCurrentUser ? styles.currentUserText : styles.otherUserText
+        ]}>
+          {item.text}
+        </Text>
+        <Text style={[
+          styles.timestamp,
+          isCurrentUser ? styles.currentUserTimestamp : styles.otherUserTimestamp
+        ]}>
+          {new Date(item.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+        </Text>
+      </Animated.View>
     );
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Chat with {otherUserEmail}</Text>
+        <Text style={styles.headerText}>
+          {otherUserEmail} ile Sohbet
+        </Text>
       </View>
       <FlatList
+        ref={flatListRef}
         data={messages}
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.messagesList}
+        style={styles.messageList}
+        contentContainerStyle={styles.messageListContent}
         inverted={false}
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
       />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -114,11 +302,14 @@ const ChatScreen = ({ route }) => {
           style={styles.input}
           value={newMessage}
           onChangeText={setNewMessage}
-          placeholder="Type a message..."
+          placeholder="Mesaj yazın..."
           multiline
         />
-        <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
-          <Text style={styles.sendButtonText}>Send</Text>
+        <TouchableOpacity 
+          style={styles.sendButton}
+          onPress={sendMessage}
+        >
+          <Text style={styles.sendButtonText}>Gönder</Text>
         </TouchableOpacity>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -131,77 +322,90 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   header: {
-    padding: 15,
+    padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
-    backgroundColor: '#f8f8f8',
+    borderBottomColor: '#e5e5e5',
+    backgroundColor: '#fff',
   },
-  headerTitle: {
+  headerText: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#333',
+    color: '#1f2937',
   },
-  messagesList: {
-    padding: 10,
+  messageList: {
+    flex: 1,
+    padding: 16,
+  },
+  messageListContent: {
+    flexGrow: 1,
   },
   messageContainer: {
     maxWidth: '80%',
-    marginVertical: 5,
-    padding: 10,
-    borderRadius: 10,
+    marginVertical: 8,
+    padding: 12,
+    borderRadius: 16,
   },
-  myMessage: {
+  currentUserMessage: {
     alignSelf: 'flex-end',
     backgroundColor: '#007AFF',
   },
-  otherMessage: {
+  otherUserMessage: {
     alignSelf: 'flex-start',
-    backgroundColor: '#E9E9EB',
+    backgroundColor: '#f3f4f6',
   },
-  senderText: {
+  senderName: {
     fontSize: 12,
-    color: '#666',
-    marginBottom: 2,
+    color: '#6b7280',
+    marginBottom: 4,
   },
   messageText: {
     fontSize: 16,
+  },
+  currentUserText: {
+    color: '#fff',
+  },
+  otherUserText: {
     color: '#000',
   },
-  messageTime: {
+  timestamp: {
     fontSize: 12,
-    color: '#666',
     alignSelf: 'flex-end',
-    marginTop: 5,
+    marginTop: 4,
+  },
+  currentUserTimestamp: {
+    color: 'rgba(255, 255, 255, 0.8)',
+  },
+  otherUserTimestamp: {
+    color: '#6b7280',
   },
   inputContainer: {
     flexDirection: 'row',
-    padding: 10,
+    padding: 16,
     borderTopWidth: 1,
-    borderTopColor: '#ddd',
+    borderTopColor: '#e5e5e5',
     backgroundColor: '#fff',
   },
   input: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 20,
-    paddingHorizontal: 15,
+    borderColor: '#d1d5db',
+    borderRadius: 24,
+    paddingHorizontal: 16,
     paddingVertical: 8,
-    marginRight: 10,
+    marginRight: 8,
     maxHeight: 100,
-    backgroundColor: '#f8f8f8',
+    backgroundColor: '#fff',
   },
   sendButton: {
     backgroundColor: '#007AFF',
-    borderRadius: 20,
-    paddingHorizontal: 15,
+    borderRadius: 24,
+    paddingHorizontal: 24,
     paddingVertical: 8,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendButtonText: {
     color: '#fff',
-    fontSize: 16,
     fontWeight: '600',
   },
 });

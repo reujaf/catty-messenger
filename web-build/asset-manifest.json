@@ -1,0 +1,17 @@
+{
+  "files": {
+    "main.js": "/static/js/main.104836a2.js",
+    "static/js/926.944fe9fd.js": "/static/js/926.944fe9fd.js",
+    "static/media/Ionicons.ttf": "/static/media/Ionicons.9b6b1954a5eb6efeaf11.ttf",
+    "firebase-messaging-sw.js": "/firebase-messaging-sw.js",
+    "index.html": "/index.html",
+    "serve.json": "/serve.json",
+    "manifest.json": "/manifest.json",
+    "main.104836a2.js.map": "/static/js/main.104836a2.js.map",
+    "926.944fe9fd.js.map": "/static/js/926.944fe9fd.js.map"
+  },
+  "entrypoints": [
+    "static/js/926.944fe9fd.js",
+    "static/js/main.104836a2.js"
+  ]
+}

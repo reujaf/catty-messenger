@@ -1,25 +1,42 @@
 {
-  "rules": {
-    ".read": "auth != null",
-    ".write": "auth != null",
-    "users": {
-      "$uid": {
+    "rules": {
         ".read": "auth != null",
-        ".write": "auth != null && auth.uid == $uid"
-      }
-    },
-    "privateChats": {
-      "$chatId": {
-        ".read": "auth != null && $chatId.contains(auth.uid)",
-        ".write": "auth != null && $chatId.contains(auth.uid)",
-        "messages": {
-          ".read": "auth != null && $chatId.contains(auth.uid)",
-          ".write": "auth != null && $chatId.contains(auth.uid)",
-          "$messageId": {
-            ".validate": "newData.hasChildren(['senderId', 'text', 'timestamp'])"
-          }
+        ".write": "auth != null",
+        "users": {
+        ".read": "auth != null",
+        "$uid": {
+            ".write": "$uid === auth.uid",
+            ".validate": "newData.hasChildren(['email'])"
         }
-      }
+        },
+        "privateChats": {
+        ".read": "auth != null",
+        "$chatId": {
+            ".read": "auth != null",
+            ".write": "auth != null",
+            "messages": {
+            ".read": "auth != null",
+            ".write": "auth != null",
+            "$messageId": {
+                ".validate": "newData.hasChildren(['senderId', 'text', 'timestamp'])",
+                "senderId": {
+                ".validate": "newData.val() === auth.uid"
+                },
+                "text": {
+                ".validate": "newData.isString() && newData.val().length > 0"
+                },
+                "timestamp": {
+                ".validate": "newData.isNumber()"
+                }
+            }
+            },
+            "deletedBy": {
+            ".write": "auth != null && $chatId.contains(auth.uid)",
+            "$uid": {
+                ".validate": "newData.isBoolean()"
+            }
+            }
+        }
+        }
     }
-  }
 } 

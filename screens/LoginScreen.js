@@ -1,141 +1,149 @@
 import React, { useState } from 'react';
-import { 
-  StyleSheet, 
-  View, 
-  Text, 
-  TextInput, 
-  TouchableOpacity, 
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  Alert
+  Alert,
+  StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { ref, set, get } from 'firebase/database';
-import { auth, database } from '../config/firebase';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { ref, set } from 'firebase/database';
+import { auth, database } from '../config/firebase-web';
 
 const LoginScreen = ({ navigation }) => {
+  const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
-  const [isLogin, setIsLogin] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  const getErrorMessage = (error) => {
+    switch (error.code) {
+      case 'auth/invalid-email':
+        return 'Geçersiz e-posta adresi formatı.';
+      case 'auth/user-disabled':
+        return 'Bu hesap devre dışı bırakıldı.';
+      case 'auth/user-not-found':
+        return 'Bu e-posta ile kayıtlı hesap bulunamadı.';
+      case 'auth/wrong-password':
+        return 'Yanlış şifre.';
+      case 'auth/email-already-in-use':
+        return 'Bu e-posta adresi ile zaten bir hesap var.';
+      case 'auth/weak-password':
+        return 'Şifre en az 6 karakter olmalıdır.';
+      case 'auth/network-request-failed':
+        return 'Ağ hatası. Lütfen internet bağlantınızı kontrol edin.';
+      default:
+        return error.message;
+    }
+  };
 
   const handleAuth = async () => {
-    if (!email || !password || (!isLogin && !username)) {
+    if (!email || !password) {
       Alert.alert('Hata', 'Lütfen tüm alanları doldurun.');
       return;
     }
 
-    try {
-      let userCredential;
-      if (isLogin) {
-        console.log('Giriş denemesi:', email);
-        userCredential = await signInWithEmailAndPassword(auth, email, password);
-        console.log('Giriş başarılı, kullanıcı:', userCredential.user);
-      } else {
-        // Kullanıcı adının benzersiz olduğunu kontrol et
-        const usersRef = ref(database, 'users');
-        const usersSnapshot = await get(usersRef);
-        const users = usersSnapshot.val() || {};
-        
-        const isUsernameTaken = Object.values(users).some(user => user.username === username);
-        if (isUsernameTaken) {
-          Alert.alert('Hata', 'Bu kullanıcı adı zaten kullanılıyor.');
-          return;
-        }
+    if (!isLogin && !username) {
+      Alert.alert('Hata', 'Lütfen kullanıcı adı girin.');
+      return;
+    }
 
-        console.log('Kayıt denemesi:', email);
-        userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        console.log('Kayıt başarılı, kullanıcı:', userCredential.user);
+    setLoading(true);
+
+    try {
+      if (isLogin) {
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        console.log('Giriş başarılı:', userCredential.user.uid);
+      } else {
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const user = userCredential.user;
         
-        // Kullanıcı bilgilerini veritabanına kaydet
-        const userRef = ref(database, `users/${userCredential.user.uid}`);
-        const userData = {
+        await set(ref(database, `users/${user.uid}`), {
           email: email,
           username: username,
-          createdAt: new Date().toISOString()
-        };
-        console.log('Kullanıcı verileri kaydediliyor:', userData);
-        await set(userRef, userData);
-        console.log('Kullanıcı verileri başarıyla kaydedildi');
+          createdAt: new Date().toISOString(),
+        });
 
-        // Kaydedilen veriyi kontrol et
-        const savedData = await get(userRef);
-        console.log('Kaydedilen veri kontrolü:', savedData.val());
+        console.log('Kayıt başarılı:', user.uid);
       }
-      
-      // Ana ekrana yönlendir
-      console.log('Ana ekrana yönlendiriliyor');
-      navigation.navigate('Main');
     } catch (error) {
       console.error('Kimlik doğrulama hatası:', error);
-      let errorMessage = 'Bir hata oluştu.';
-      if (error.code === 'auth/email-already-in-use') {
-        errorMessage = 'Bu e-posta adresi zaten kullanılıyor.';
-      } else if (error.code === 'auth/invalid-email') {
-        errorMessage = 'Geçersiz e-posta adresi.';
-      } else if (error.code === 'auth/weak-password') {
-        errorMessage = 'Şifre en az 6 karakter olmalıdır.';
-      } else if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
-        errorMessage = 'E-posta veya şifre hatalı.';
-      }
-      Alert.alert('Hata', errorMessage);
+      Alert.alert('Hata', getErrorMessage(error));
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <View style={styles.logoContainer}>
-        <Text style={styles.logoText}>CATTY</Text>
-      </View>
-      
-      <View style={styles.formContainer}>
-        {!isLogin && (
+      <View style={styles.content}>
+        <Text style={styles.title}>
+          {isLogin ? 'Sign In' : 'Create Account'}
+        </Text>
+
+        <View style={styles.form}>
+          {!isLogin && (
+            <TextInput
+              style={styles.input}
+              placeholder="Username"
+              value={username}
+              onChangeText={setUsername}
+              autoCapitalize="none"
+              editable={!loading}
+            />
+          )}
+
           <TextInput
             style={styles.input}
-            placeholder="Kullanıcı Adı"
-            value={username}
-            onChangeText={setUsername}
+            placeholder="Email"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
             autoCapitalize="none"
+            editable={!loading}
           />
-        )}
+          
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            editable={!loading}
+          />
+          
+          <TouchableOpacity 
+            style={[styles.button, loading && styles.buttonDisabled]}
+            onPress={handleAuth}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>
+                {isLogin ? 'Sign In' : 'Create Account'}
+              </Text>
+            )}
+          </TouchableOpacity>
 
-        <TextInput
-          style={styles.input}
-          placeholder="E-posta"
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-        />
-        
-        <TextInput
-          style={styles.input}
-          placeholder="Şifre"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-        />
-        
-        <TouchableOpacity 
-          style={styles.authButton}
-          onPress={handleAuth}
-        >
-          <Text style={styles.authButtonText}>
-            {isLogin ? 'Giriş Yap' : 'Kayıt Ol'}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.switchButton}
-          onPress={() => setIsLogin(!isLogin)}
-        >
-          <Text style={styles.switchButtonText}>
-            {isLogin ? 'Hesabınız yok mu? Kayıt Olun' : 'Zaten hesabınız var mı? Giriş Yapın'}
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.switchButton}
+            onPress={() => setIsLogin(!isLogin)}
+            disabled={loading}
+          >
+            <Text style={styles.switchButtonText}>
+              {isLogin ? 'Need an account? Sign Up' : 'Already have an account? Sign In'}
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -146,46 +154,56 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
-  logoContainer: {
+  content: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 100,
-    marginBottom: 50,
+    padding: 16,
   },
-  logoText: {
-    fontSize: 42,
+  title: {
+    fontSize: 32,
     fontWeight: 'bold',
     color: '#007AFF',
+    marginBottom: 32,
   },
-  formContainer: {
-    paddingHorizontal: 20,
+  form: {
+    width: '100%',
+    maxWidth: 400,
   },
   input: {
-    backgroundColor: '#f8f8f8',
+    width: '100%',
+    backgroundColor: '#F8F8F8',
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#E5E7EB',
     borderRadius: 8,
-    padding: 15,
-    marginBottom: 15,
+    padding: 12,
+    marginBottom: 16,
     fontSize: 16,
   },
-  authButton: {
+  button: {
+    width: '100%',
     backgroundColor: '#007AFF',
     borderRadius: 8,
-    padding: 15,
+    padding: 12,
+    marginBottom: 16,
     alignItems: 'center',
-    marginBottom: 15,
   },
-  authButtonText: {
+  buttonDisabled: {
+    opacity: 0.7,
+  },
+  buttonText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: '600',
+    textAlign: 'center',
   },
   switchButton: {
-    alignItems: 'center',
+    width: '100%',
   },
   switchButtonText: {
-    color: '#007AFF',
+    color: '#6B7280',
     fontSize: 16,
+    textAlign: 'center',
   },
 });
 

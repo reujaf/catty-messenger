@@ -1,44 +1,24 @@
 {
   "expo": {
     "name": "Catty",
-    "slug": "catty-messenger",
+    "slug": "catty",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "automatic",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
-    "updates": {
-      "fallbackToCacheTimeout": 0
-    },
+    "userInterfaceStyle": "light",
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.catty.messenger",
-      "buildNumber": "1.0.0"
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#FFFFFF"
-      },
-      "package": "com.catty.messenger",
-      "versionCode": 1,
-      "permissions": []
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "2b61fd75-5e64-4ae4-8bb7-7e4b8a83c251"
+        "backgroundColor": "#ffffff"
       }
     },
-    "owner": "reujaf"
+    "web": {
+      "bundler": "webpack"
+    }
   }
 }
+ 
